@@ -16,9 +16,9 @@ logging.basicConfig(
 load_dotenv()
 
 # Sabit Değişkenler
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8973562241:AAGAE-AbQUo455tL0x1rKlNv9V7n0AVsWwo")
-CHAT_ID = os.getenv("CHAT_ID", "8973562241")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8973362241:AAE9pGRLUWUZKWlHTDUeRrS9yQ0JR2xt4FA")
+CHAT_ID = os.getenv("CHAT_ID", "8973362241")
+GEMINI_API_KEY = os.getenv("AQ.Ab8RN6IJLQdwobWNdB_nq5RIN3naVbuWkKBQ6Ebax-SiJ50vuw")
 
 # Gemini LLM Yapılandırması
 llm = ChatGoogleGenerativeAI(
