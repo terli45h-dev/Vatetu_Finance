@@ -1,233 +1,120 @@
-TELEGRAM_BOT_TOKEN = "8973362241:AAE9pGRLUWUZKWlHTDUeRrS9yQ0JR2xt4FA"
-TELEGRAM_CHAT_ID = "8973362241"
-
-
-import time
+import os
+import logging
 import requests
-import asyncio
 from dotenv import load_dotenv
-from typing import TypedDict
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool
-from langgraph.graph import StateGraph, END
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
+
+# Logging ayarları
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 load_dotenv()
 
-TELEGRAM_BOT_TOKEN = "8973362241:AAE9pGRLUWUZKWlHTDUeRrS9yQ0JR2xt4FA"
-TELEGRAM_CHAT_ID = "8973362241"
+# Sabit Değişkenler
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8973362241:AAE9pGRLUWUZKWlHTDUeRrS9yQ0JR2xt4FA")
+CHAT_ID = os.getenv("CHAT_ID", "8973362241")
+GEMINI_API_KEY = os.getenv("AQ.Ab8RN6IJLQdwobWNdB_nq5RIN3naVbuWkKBQ6Ebax-SiJ50vuw")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+# Gemini LLM Yapılandırması
+llm = ChatGoogleGenerativeAI(
+    model="gemini-3.5-flash-lite",
+    google_api_key=GEMINI_API_KEY,
+    temperature=0.3
+)
 
-# --- 2. ORTAK HAFIZA (STATE) ---
-class FinansState(TypedDict):
-    kullanici_adi: str
-    talimat: str
-    rapor: str
-    denetmen_notu: str
-    deneme_sayisi: int
-
-# --- 3. UZUN DÖNEMLİ (SWING) ANALİZ ARAÇLARI ---
-
-@tool
-def top_traders_uzun_donem_pozisyonlari(symbol: str = "BTCUSDT") -> str:
-    """Binance üzerindeki Top Trader hesaplarının 4 Saatlik/Günlük periyottaki Long/Short pozisyon dağılımını getirir."""
+def get_market_summary():
+    """Binance API üzerinden hızlı veri çeker."""
     try:
-        url = f"https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol={symbol.upper()}&period=4h&limit=1"
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        btc_res = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT").json()
+        eth_res = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT").json()
         
-        if res.status_code == 200 and len(res.json()) > 0:
-            data = res.json()[0]
-            long_account = float(data.get('longAccount', 0.5)) * 100
-            short_account = float(data.get('shortAccount', 0.5)) * 100
-            long_short_ratio = float(data.get('longShortRatio', 1.0))
-            egilim = "LONG (Uzun Dönem Boğa)" if long_account > short_account else "SHORT (Uzun Dönem Ayı)"
-            
-            return (
-                f"<b>Top Trader Uzun Dönem Pozisyon Verileri ({symbol.upper()} - 4H/1D):</b>\n"
-                f"- Long Ağırlığı: %{long_account:.2f} | Short Ağırlığı: %{short_account:.2f}\n"
-                f"- Long/Short Rasyosu: {long_short_ratio:.2f}\n"
-                f"- Akıllı Para (Smart Money) Makro Eğilimi: <b>{egilim}</b>"
-            )
-        return "Top Trader verisi çekilemedi. Varsayılan Piyasa Eğilimi: %58 Long / %42 Short."
+        btc_price = float(btc_res.get("lastPrice", 0))
+        btc_change = float(btc_res.get("priceChangePercent", 0))
+        eth_price = float(eth_res.get("lastPrice", 0))
+        eth_change = float(eth_res.get("priceChangePercent", 0))
+        
+        return f"BTC: ${btc_price:,.2f} (\%{btc_change:+.2f}) \vert{} ETH:${eth_price:,.2f} (%{eth_change:+.2f})"
     except Exception as e:
-        return f"Top Trader hatası: {str(e)}"
+        return f"Piyasa verisi çekilemedi: {e}"
 
-@tool
-def telegram_kanali_analizi(kanal_adi: str = "Trading Lab") -> str:
-    """Trading Lab ve öne çıkan sinyal kanallarından gelen uzun vadeli (Swing) analiz ve grafik paylaşımlarını çeker."""
+def generate_vatetu_report():
+    """Analist-Critic mantığı ile 2 saatlik periyodik rapor üretir."""
+    market_data = get_market_summary()
+    
+    system_prompt = (
+        "Sen Vatetü adında otonom bir AI Swing/Position Trading asistanısın. "
+        "Kullanıcı için 4H/1D trendleri kapsayan 2 saatlik periyodik özet raporu hazırlıyorsun. "
+        "Yalnızca HTML biçimlendirmesi kullan (<b>, <i>, <code>). Markdown (`*, _`) KESİNLİKLE KULLANMA. "
+        "Raporda Analist görüşü ve Critic (risk) değerlendirmesi net olsun."
+    )
+    
+    user_prompt = f"Canlı Piyasa Verileri: {market_data}. Lütfen 2 saatlik periyodik swing/macro durum raporunu ve risk uyarını hazırla."
+    
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    response = llm.invoke(messages)
+    return response.content
+
+async def send_scheduled_report(context: ContextTypes.DEFAULT_TYPE):
+    """Her 2 saatte bir çalışan zamanlanmış görev."""
+    job_chat_id = context.job.chat_id
     try:
-        return (
-            f"<b>Telegram Makro Analiz Verisi ({kanal_adi}):</b>\n"
-            f"- Önerilen Parite: <b>BTC/USDT</b> (Uzun Dönem)\n"
-            f"- Sinyal Yönü: <b>LONG (Spot / Düşük Kaldıraç Vadeli)</b>\n"
-            f"- İdeal İntifa/Giriş Bölgesi: 66,500 - 67,200 USDT\n"
-            f"- Ana Hedef (TP1 / TP2): 72,000 USDT / 76,000 USDT\n"
-            f"- Ana Stop-Loss (SL): 64,800 USDT\n"
-            f"- Risk/Ödül Rasyosu: 1:3.2"
+        report = generate_vatetu_report()
+        await context.bot.send_message(
+            chat_id=job_chat_id,
+            text=f"<b>🕒 VATETÜ 2 SAATLİK OTO-RAPOR</b>\n\n{report}",
+            parse_mode="HTML"
         )
     except Exception as e:
-        return f"Telegram verisi hatası: {str(e)}"
+        # HTML hatası olursa Düz Metin (Plain Text) Fallback
+        report_plain = generate_vatetu_report().replace("<b>","").replace("</b>","").replace("<i>","").replace("</i>","")
+        await context.bot.send_message(
+            chat_id=job_chat_id,
+            text=f"🕒 VATETÜ 2 SAATLİK OTO-RAPOR\n\n{report_plain}"
+        )
 
-@tool
-def binance_futures_firsatlari() -> str:
-    """Binance Futures piyasasındaki hacimli ana koinlerin durumunu getirir."""
-    try:
-        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code != 200:
-            return "Binance Futures kısıtlaması."
-            
-        data = res.json()
-        sorted_by_volume = sorted(data, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:5]
-        
-        firsatlar = "<b>Binance Hacimli Ana Koinler:</b>\n"
-        for item in sorted_by_volume:
-            symbol = item['symbol']
-            price = float(item['lastPrice'])
-            change = float(item['priceChangePercent'])
-            icon = "🟢" if change >= 0 else "🔴"
-            firsatlar += f"- <b>{symbol}</b>: {price:.4f} USDT ({icon} %{change:.2f})\n"
-        return firsatlar
-    except Exception as e:
-        return f"Futures hatası: {str(e)}"
-
-@tool
-def gunluk_kripto_haberleri() -> str:
-    """Piyasadaki en güncel kripto para makro haber başlıklarını ve Korku/Açgözlülük İndeksini getirir."""
-    try:
-        url = "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code == 200:
-            articles = res.json().get("Data", [])[:3]
-            if articles:
-                haberler = "<b>Makro Piyasa Haberleri:</b>\n"
-                for art in articles:
-                    haberler += f"- <b>{art.get('title', '')}</b>\n"
-                return haberler
-    except Exception:
-        pass
-    return "Haber servisi yanıt vermiyor."
-
-tools = [
-    top_traders_uzun_donem_pozisyonlari, 
-    telegram_kanali_analizi, 
-    binance_futures_firsatlari, 
-    gunluk_kripto_haberleri
-]
-
-# --- 4. MODEL VE YÖNETİCİ DÜĞÜMLERİ ---
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")
-llm_with_tools = llm.bind_tools(tools)
-
-def analist_node(state: FinansState):
-    kullanici = state.get("kullanici_adi", "Telman Bey")
-    talimat = state["talimat"]
-    hata = state.get("denetmen_notu", "")
-    deneme = state.get("deneme_sayisi", 0) + 1
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start komutu verilince çalışır ve 2 saatlik zamanlayıcıyı başlatır."""
+    chat_id = update.effective_chat.id
     
-    system_rules = f"""Sen Vatetü adında Telman Bey'in UZUN DÖNEMLİ (Swing Trade / Position Trade) risk filtresi ve interaktif analiz asistanısın.
+    # Mevcut zamanlanmış görevleri temizle (mükerrer çalışmayı önlemek için)
+    current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
+    for job in current_jobs:
+        job.schedule_removal()
     
-    KURALLAR:
-    1. Kullanıcıya HER ZAMAN '{kullanici}' veya 'Telman Bey' şeklinde saygıyla hitap et.
-    2. 'telegram_kanali_analizi', 'top_traders_uzun_donem_pozisyonlari', 'binance_futures_firsatlari' ve 'gunluk_kripto_haberleri' araçlarını gerektikçe çalıştırıp verileri topla.
-    3. Yanıtında HTML biçimlendirmesi kullanabilirsin (<b>koyu</b>, <i>italik</i> gibi). Markdown '*' veya '_' sembollerini zorunlu olmadıkça kullanma.
-    4. Kullanıcının sorduğu soruya göre uzun dönemli makro trendi, Top Trader pozisyonlarını ve risk durumunu değerlendirerek net, samimi ve uzman bir yanıt ver."""
-
-    prompt = f"{system_rules}\n\nKullanıcı Mesajı: '{talimat}'" if hata == "" else f"{system_rules}\n\nHata Düzeltme: {hata}"
-    cevap = llm_with_tools.invoke(prompt)
+    # 2 Saatte bir çalışacak görevi ekle (7200 saniye = 2 saat)
+    context.job_queue.run_repeating(
+        send_scheduled_report,
+        interval=7200,
+        first=10,  # Komuttan 10 saniye sonra ilk raporu atar
+        chat_id=chat_id,
+        name=str(chat_id)
+    )
     
-    if cevap.tool_calls:
-        toplanan_veriler = []
-        for tool_call in cevap.tool_calls:
-            name = tool_call["name"]
-            args = tool_call.get("args", {})
-            if name == "top_traders_uzun_donem_pozisyonlari":
-                toplanan_veriler.append(top_traders_uzun_donem_pozisyonlari.invoke(args))
-            elif name == "telegram_kanali_analizi":
-                toplanan_veriler.append(telegram_kanali_analizi.invoke(args))
-            elif name == "binance_futures_firsatlari":
-                toplanan_veriler.append(binance_futures_firsatlari.invoke({}))
-            elif name == "gunluk_kripto_haberleri":
-                toplanan_veriler.append(gunluk_kripto_haberleri.invoke({}))
-                
-        yeni_prompt = prompt + f"\n\nToplanan Canlı Veriler:\n{toplanan_veriler}\n\nÇapraz analiz yap ve Telman Bey için yanıtı şık bir şekilde sun."
-        cevap_metni = llm.invoke(yeni_prompt).content
-    else:
-        cevap_metni = cevap.content
+    await update.message.reply_text(
+        "<b>✅ Vatetü Oto-Raporlama Aktif!</b>\n\n"
+        "Her 2 saatte bir otomatik piyasa analizi ve risk raporu bu sohbet üzerinden tarafınıza iletilecektir, Telman Bey.",
+        parse_mode="HTML"
+    )
 
-    if isinstance(cevap_metni, list):
-        cevap_metni = cevap_metni[0]["text"]
-        
-    return {"rapor": cevap_metni, "deneme_sayisi": deneme}
-
-def denetmen_node(state: FinansState):
-    rapor = state["rapor"]
-    prompt = f"""Raporu denetle.
-    KURALLAR:
-    1. Rapor doğrudan Telman Bey'e hitap etmelidir.
-    2. Cevap net, mantıklı ve finansal gerçeklerle uyumlu olmalıdır.
-    Kurala uyulmuşsa SADECE 'ONAYLANDI' yaz. Uyulmadıysa hatayı belirt.
-    Rapor:\n{rapor}"""
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    cevap = llm.invoke(prompt).content
-    if isinstance(cevap, list):
-        cevap = cevap[0]["text"]
-    return {"denetmen_notu": cevap}
-
-def karar_verici(state: FinansState):
-    karar = state["denetmen_notu"]
-    deneme = state["deneme_sayisi"]
-    if "ONAYLANDI" in karar.upper() or deneme >= 3:
-        return "onay"
-    return "hata_var"
-
-workflow = StateGraph(FinansState)
-workflow.add_node("Analist", analist_node)
-workflow.add_node("Denetmen", denetmen_node)
-workflow.set_entry_point("Analist")
-workflow.add_edge("Analist", "Denetmen")
-workflow.add_conditional_edges("Denetmen", karar_verici, {"hata_var": "Analist", "onay": END})
-agent_app = workflow.compile()
-
-# --- 5. INTERAKTİF TELEGRAM MESAJLAŞMA SİSTEMİ ---
-
-async def start_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 <b>Merhaba Telman Bey!</b>\nBen Vatetü. Bana Telegram üzerinden dilediğiniz piyasayı sorabilir, uzun dönemli analiz veya güncel durum isteyebilirsiniz.", parse_mode="HTML")
-
-async def mesaj_yanitla(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kullanici_mesaji = update.message.text
-    await update.message.reply_text("⏳ <i>Vatetü canlı verileri analiz ediyor ve Denetmen süzgecinden geçiriyor...</i>", parse_mode="HTML")
+    app.add_handler(CommandHandler("start", start_command))
     
-    durum = {
-        "kullanici_adi": "Telman Bey",
-        "talimat": kullanici_mesaji,
-        "rapor": "",
-        "denetmen_notu": "",
-        "deneme_sayisi": 0
-    }
-    
-    sonuc = agent_app.invoke(durum)
-    rapor = sonuc["rapor"]
-    
-    # Güvenli Mesaj Gönderim Aşaması (Hata yakalayıcı eklendi)
-    try:
-        await update.message.reply_text(rapor, parse_mode="HTML")
-    except Exception:
-        # Eğer HTML ayrıştırma hatası olursa düz metin olarak fırlatır, bot kesinlikle çökmez
-        await update.message.reply_text(rapor)
+    print("✅ Vatetü Telegram'da canlıda ve 2 saatlik zamanlayıcı hazır!")
+    app.run_polling()
 
-# --- 6. BOTU BAŞLATMA ---
 if __name__ == "__main__":
-    print("🚀 Vatetü İnteraktif Telegram Asistanı Başlatılıyor...")
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    main()
     
-    application.add_handler(CommandHandler("start", start_komutu))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mesaj_yanitla))
-    
-    print("✅ Vatetü Telegram'da canlıda! Artık Telegram'dan yazışabilirsiniz Telman Bey.")
-    application.run_polling()
+
 
