@@ -50,8 +50,8 @@ FEE           = 0.001
 SUMMARY_EVERY = 12            
 TRADE_LOG     = Path(__file__).resolve().parent / "paper_trades_futures.csv"
 
-TG_TOKEN   = os.getenv("8973362241:AAE9pGRLUWUZKWlHTDUeRrS9yQ0JR2xt4FA")
-TG_CHAT_ID = os.getenv("7718824545")
+TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
