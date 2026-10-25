@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-BINANCE FUTURES TOP 10 TARAYICI - GELİŞMİŞ V4
+BINANCE FUTURES TOP 10 TARAYICI - NİHAİ V5
 - Binance Futures API kullanır.
-- Başlangıçta ve belirli aralıklarla hacme göre Top 10 coinini seçer.
+- Hacme göre Top 10 coini seçer.
 - LONG: EMA200 üstü + Fibo (0.382-0.618) + Bullish FVG + Hacim.
 - SHORT: EMA200 altı + Fibo (0.5-0.618) + Bearish FVG + Hacim.
-- Telegram'a anlık sinyal gönderir.
 """
 
 import os
@@ -21,14 +20,15 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+# .env dosyasını yükle (Yerel çalışmalar için)
 load_dotenv(Path(__file__).resolve().parent / ".env", override=True, encoding="utf-8-sig")
 
 # ══════════════ AYARLAR ══════════════
 INTERVAL      = "4h"
 LIMIT         = 300           
-SCAN_SEC      = 300           # 5 dakikada bir tarama
+SCAN_SEC      = 300           # 5 dakikada bir tarama (Yerel için)
 START_BALANCE = 1000.0
-TOP_N_COINS   = 10            # Taranacak coin sayısı (İstersen 20 yapabilirsin)
+TOP_N_COINS   = 10            
 
 # BINANCE FUTURES API URL'LERİ
 FUTURES_BASE_URL = "https://fapi.binance.com"
@@ -50,8 +50,11 @@ FEE           = 0.001
 SUMMARY_EVERY = 12            
 TRADE_LOG     = Path(__file__).resolve().parent / "paper_trades_futures.csv"
 
+# Telegram Bilgileri
 TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Loglama Ayarları
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(message)s",
@@ -61,7 +64,7 @@ log = logging.getLogger("futures_scanner")
 
 ALLOW_SHORT = True
 
-# ══════════════ TELEGRAM ══════════════
+# ══════════════ TELEGRAM (GÜVENLİ) ══════════════
 def tg_send(text: str):
     if not (TG_TOKEN and TG_CHAT_ID):
         log.warning("Telegram Token veya Chat ID eksik!")
@@ -73,25 +76,22 @@ def tg_send(text: str):
             timeout=10,
         )
     except Exception as e:
-        log.error(f"Telegram hatası: {e}")
+        # Sızıntıyı önlemek için sadece hatanın adını logla, URL'yi değil!
+        log.error(f"Telegram hatası: {type(e).__name__}")
 
 # ══════════════ TOP 10 COIN BULUCU ══════════════
 def get_top_futures_symbols(limit=10) -> list:
-    """Binance Futures'ta 24 saatlik hacme göre en yüksek coinleri döndürür."""
     try:
         r = requests.get(TICKER_24H_URL, timeout=10)
         r.raise_for_status()
         data = r.json()
-        # Sadece USDT paritelerini al
         usdt_pairs = [d for d in data if d['symbol'].endswith('USDT')]
-        # Hacme (quoteVolume) göre büyükten küçüğe sırala
         sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x['quoteVolume']), reverse=True)
         symbols = [d['symbol'] for d in sorted_pairs[:limit]]
         log.info(f"Güncel Top {limit} Coin: {symbols}")
         return symbols
     except Exception as e:
-        log.error(f"Top coin çekilemedi: {e}")
-        # Hata olursa varsayılan popüler coinler
+        log.error(f"Top coin çekilemedi: {type(e).__name__}")
         return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"]
 
 # ══════════════ MATEMATİKSEL HESAPLAMALAR ══════════════
@@ -151,7 +151,7 @@ def fetch_klines(symbol: str) -> pd.DataFrame | None:
         df.index = pd.to_datetime(df["open_time"], unit="ms")
         return df[["open", "high", "low", "close", "volume"]]
     except Exception as e:
-        log.error(f"{symbol} veri hatası: {e}")
+        log.error(f"{symbol} veri hatası: {type(e).__name__}")
         return None
 
 def compute_signal(df: pd.DataFrame) -> dict | None:
@@ -283,7 +283,7 @@ class PaperBroker:
             f"Giriş Fiyatı: <code>{price:.6g}</code>\n"
             f"Stop-Loss: <code>{sl:.6g}</code>\n"
             f"Take-Profit: <code>{tp:.6g}</code>\n\n"
-            f"<i>(Bu bir sanal işlem sinyalidir, yatırım tavsiyesi değildir.)</i>"
+            f"<i>(Sanal işlem sinyalidir, yatırım tavsiyesi değildir.)</i>"
         )
 
     def track(self, sym: str, high: float, low: float):
@@ -347,61 +347,74 @@ class PaperBroker:
             f"Neden: {why}"
         )
 
-# ══════════════ ANA DÖNGÜ ══════════════
-def main():
-    broker = PaperBroker()
-    last_candle: dict[str, object] = {}
-    scan_no = 0
-    symbols = get_top_futures_symbols(TOP_N_COINS)
-
-    tg_send(f"🤖 <b>FUTURES TOP {TOP_N_COINS} TARAYICI BAŞLADI</b>\n"
-            f"Taranan Coinler: {', '.join(symbols)}\n"
-            f"Strateji: EMA200 + Fibo + FVG + Hacim")
-
-    try:
-        while True:
-            scan_no += 1
-            prices = {}
+# ══════════════ ANA DÖNGÜ (TEK TARAMA) ══════════════
+def run_scan(broker, last_candle, symbols):
+    prices = {}
+    for sym in symbols:
+        try:
+            df = fetch_klines(sym)
+            if df is None or len(df) < 250: continue
             
-            # Her 12 taramada bir (1 saatte bir) Top 10 listesini güncelle
-            if scan_no % SUMMARY_EVERY == 0:
-                symbols = get_top_futures_symbols(TOP_N_COINS)
+            forming = df.iloc[-1]
+            prices[sym] = float(forming["close"])
 
-            for sym in symbols:
-                try:
-                    df = fetch_klines(sym)
-                    if df is None or len(df) < 250: continue
+            broker.track(sym, forming["high"], forming["low"])
+            msg = broker.check_exit(sym, forming["high"], forming["low"])
+            if msg: tg_send(msg)
+
+            sig = compute_signal(df.iloc[:-1])
+            if sig and last_candle.get(sym) != sig["candle"]:
+                msg = broker.open(sym, sig)
+                if msg:
+                    last_candle[sym] = sig["candle"]
+                    tg_send(msg)
+                    log.info(f"SİNYAL YAKALANDI: {sym} {sig['direction']}")
                     
-                    forming = df.iloc[-1]
-                    prices[sym] = float(forming["close"])
+        except Exception as e:
+            log.error(f"{sym} taranırken hata: {type(e).__name__}")
+        
+        time.sleep(0.5)
+    return prices
 
-                    broker.track(sym, forming["high"], forming["low"])
-                    msg = broker.check_exit(sym, forming["high"], forming["low"])
-                    if msg: tg_send(msg)
-
-                    sig = compute_signal(df.iloc[:-1])
-                    if sig and last_candle.get(sym) != sig["candle"]:
-                        msg = broker.open(sym, sig)
-                        if msg:
-                            last_candle[sym] = sig["candle"]
-                            tg_send(msg)
-                            log.info(f"SİNYAL YAKALANDI: {sym} {sig['direction']}")
-                            
-                except Exception as e:
-                    log.error(f"{sym} taranırken hata: {e}")
-                
-                # API Rate limit'e takılmamak için her coinden sonra 0.5 saniye bekle
-                time.sleep(0.5)
-
-            if scan_no % SUMMARY_EVERY == 0:
-                eq = broker.equity(prices)
-                tg_send(f"📊 <b>Saatlik Özet</b>\nSanal Bakiye: {eq:.2f} USDT\nAçık Pozisyon: {len(broker.positions)}")
-
-            log.info(f"Tarama tamamlandı. {SCAN_SEC} saniye bekleniyor...")
-            time.sleep(SCAN_SEC)
-            
-    except KeyboardInterrupt:
-        log.info("Bot durduruldu.")
-
+# ══════════════ PROGRAM BAŞLANGICI ══════════════
 if __name__ == "__main__":
-    main()
+    broker = PaperBroker()
+    last_candle = {}
+    
+    # Ortamı tespit et (GitHub mı, Yerel mi?)
+    is_github = os.getenv("GITHUB_ACTIONS") == "true"
+
+    if is_github:
+        # GITHUB ACTIONS MANTIĞI (Tek seferlik çalışır)
+        symbols = get_top_futures_symbols(TOP_N_COINS)
+        # Sadece başlangıçta 1 kez mesaj at
+        tg_send(f"🤖 <b>GITHUB TARAYICI ÇALIŞTI</b>\nTaranan Coinler: {', '.join(symbols)}")
+        run_scan(broker, last_candle, symbols)
+        log.info("GitHub taraması tamamlandı.")
+        
+    else:
+        # VS CODE (YEREL) MANTIĞI (Sonsuz döngü)
+        log.info("Yerel bot başlatıldı. Sonsuz döngü aktif.")
+        tg_send("🚀 <b>Yerel Bot Başlatıldı</b>\nPiyasa anlık taranıyor...")
+        
+        symbols = get_top_futures_symbols(TOP_N_COINS)
+        scan_no = 0
+        
+        try:
+            while True:
+                scan_no += 1
+                # Her 12 taramada bir (1 saatte bir) Top 10 listesini güncelle
+                if scan_no % SUMMARY_EVERY == 0:
+                    symbols = get_top_futures_symbols(TOP_N_COINS)
+                
+                prices = run_scan(broker, last_candle, symbols)
+                
+                if scan_no % SUMMARY_EVERY == 0:
+                    eq = broker.equity(prices)
+                    tg_send(f"📊 <b>Saatlik Özet</b>\nSanal Bakiye: {eq:.2f} USDT\nAçık Pozisyon: {len(broker.positions)}")
+
+                log.info(f"Tarama tamamlandı. {SCAN_SEC} saniye bekleniyor...")
+                time.sleep(SCAN_SEC)
+                
+        except KeyboardInterrupt:
+            log.info("Bot durduruldu.")
