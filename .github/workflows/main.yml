@@ -1,1 +1,27 @@
+name: Sinyal Botu
 
+on:
+  schedule:
+    - cron: '*/5 * * * *' # Her 5 dakikada bir çalışır
+  workflow_dispatch:      # İstersen manuel tetikleyebilmen için buton ekler
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu çek
+        uses: actions/checkout@v3
+
+      - name: Python'u kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Kütüphaneleri yükle
+        run: pip install -r requirements.txt
+
+      - name: Botu çalıştır
+        env:
+          TELEGRAM_BOT_TOKEN: ${{secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
