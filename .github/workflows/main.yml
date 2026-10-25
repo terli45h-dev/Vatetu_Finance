@@ -9,18 +9,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Kodu çek
+      - name: Kodu cek
         uses: actions/checkout@v4
 
-      - name: Python'u kur
+      - name: Python kur
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Kütüphaneleri yükle
+      - name: Kutuphaneleri yukle
         run: pip install -r requirements.txt
 
-      - name: Botu çalıştır
+      - name: Botu calistir
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
